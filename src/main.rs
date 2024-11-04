@@ -1,7 +1,9 @@
 use clap::Parser;
+use std::fs::{self, File};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, io};
+use tempfile::TempDir;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -34,7 +36,7 @@ fn main() {
     // Take the top for now to test processing
     match subdirectories {
         Ok(subdirectories) => {
-            let first = subdirectories[0].clone();
+            let first = subdirectories[20].clone();
             println!("Subdirectory: {}", first);
             let video_clips_directory = validate_clip_directory(first.as_str())
                 .map(|res| res.unwrap_or_default())
@@ -98,9 +100,15 @@ fn concat_m4s_files(dir: &Path, output_file: &str) -> io::Result<()> {
     let init_audio_file_path = dir.join(INIT_AUDIO_FILE);
 
     if init_video_file_path.exists() && init_audio_file_path.exists() {
+        let tmp_dir = tempfile::tempdir().expect("Failed to create temporary directory");
+        println!("Creating temp directory in: {:?}", tmp_dir.path());
         // Process video
-        concat_video_files(init_video_file_path, dir);
-        concat_audio_files(init_audio_file_path, dir);
+        concat_video_files(init_video_file_path, dir, &tmp_dir);
+        concat_audio_files(init_audio_file_path, dir, &tmp_dir);
+        join_video_audio(&tmp_dir);
+
+        cleanup(&tmp_dir);
+
         Ok(())
     } else {
         return Err(io::Error::new(
@@ -110,67 +118,141 @@ fn concat_m4s_files(dir: &Path, output_file: &str) -> io::Result<()> {
     }
 }
 
-fn concat_video_files(init_video_file_path: PathBuf, dir: &Path) -> io::Result<()> {
+fn concat_video_files(
+    init_video_file_path: PathBuf,
+    dir: &Path,
+    tmp_dir: &TempDir,
+) -> io::Result<()> {
     println!("Processing video...");
-    let mut command = get_command();
-    command.arg(init_video_file_path);
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map_or(false, |s| s.starts_with("chunk-stream0"))
-        {
-            command.arg(path);
-        }
+    let mut output_file = File::create(tmp_dir.path().join("tmp_video.mp4"))?;
+    let mut init_file = File::open(init_video_file_path)?;
+
+    io::copy(&mut init_file, &mut output_file);
+
+    // Collect and sort chunk files
+    let mut chunk_files: Vec<_> = fs::read_dir(dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with("chunk-stream0-"))
+            {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    sort_chunks(&mut chunk_files);
+
+    // Append sorted chunk files
+    for path in chunk_files {
+        let mut chunk_file = File::open(path)?;
+        io::copy(&mut chunk_file, &mut output_file)?;
     }
 
-    // More windows specific things
-    if cfg!(target_os = "windows") {
-        command.arg("+");
+    println!("Finished concatting video files...");
+
+    Ok(())
+}
+
+fn concat_audio_files(
+    init_audio_file_path: PathBuf,
+    dir: &Path,
+    tmp_dir: &TempDir,
+) -> io::Result<()> {
+    println!("Processing audio...");
+
+    let mut output_file = File::create(tmp_dir.path().join("tmp_audio.mp4"))?;
+    let mut init_file = File::open(init_audio_file_path)?;
+
+    io::copy(&mut init_file, &mut output_file);
+
+    // Collect and sort chunk files
+    let mut chunk_files: Vec<_> = fs::read_dir(dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with("chunk-stream1-"))
+            {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    sort_chunks(&mut chunk_files);
+
+    // Append sorted chunk files
+    for path in chunk_files {
+        let mut chunk_file = File::open(path)?;
+        io::copy(&mut chunk_file, &mut output_file)?;
     }
 
-    command.arg("./output_file.mp4");
+    println!("Finished concatting audio files...");
 
-    let x = format!("{:?}", command);
-    println!("{}", x);
+    Ok(())
+}
 
-    // Execute our command
-    let output = command.output()?;
+fn join_video_audio(tmp_dir: &TempDir) -> io::Result<()> {
+    println!("Merging using ffmpeg...");
+
+    let output = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(tmp_dir.path().join("tmp_video.mp4"))
+        .arg("-i")
+        .arg(tmp_dir.path().join("tmp_audio.mp4"))
+        .arg("-c:v")
+        .arg("libx265")
+        .arg("-c:a")
+        .arg("copy")
+        .arg("output.mp4")
+        .output()?;
 
     if !output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
             format!(
-                "Failed to concatenate files: {}",
+                "Failed to combine video and audio: {}",
                 String::from_utf8_lossy(&output.stderr)
             ),
         ));
     }
 
-    println!("Finished concatting video files...");
-    let x = format!("{:?}", command);
-    println!("{}", x);
-
     Ok(())
 }
 
-fn concat_audio_files(init_audio_file_path: PathBuf, dir: &Path) {
-    let mut command = get_command();
+fn cleanup(tmp_dir: &TempDir) {
+    fs::remove_file(tmp_dir.path().join("tmp_video.mp4"));
+    fs::remove_file(tmp_dir.path().join("tmp_audio.mp4"));
 }
 
-fn get_command() -> Command {
-    let command = if cfg!(target_os = "windows") {
-        let mut win_command = Command::new("cmd");
-        win_command.arg("/C").arg("copy").arg("/b");
-        win_command
-    } else {
-        let unix_command = Command::new("cat");
-        unix_command
-    };
+fn sort_chunks(chunk_files: &mut Vec<PathBuf>) {
+    chunk_files.sort_by(|a, b| {
+        // Extract the numeric part from the file names for comparison
+        let a_num = a
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.split('-').last())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let b_num = b
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.split('-').last())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
 
-    command
+        a_num.cmp(&b_num)
+    });
 }
