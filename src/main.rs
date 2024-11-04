@@ -218,6 +218,8 @@ fn join_video_audio(tmp_dir: &TempDir) -> io::Result<()> {
         .arg("hvc1")
         .arg("-c:a")
         .arg("copy")
+        .arg("-crf")
+        .arg("18")
         .arg("output.mp4")
         .stdout(Stdio::piped())
         .spawn()?;
