@@ -2,7 +2,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
@@ -51,6 +51,7 @@ fn main() {
             println!("Processing {} clips...", subdirectories.len());
 
             for directory in subdirectories {
+                cleanup(&tmp_dir); // Just in case there's hanging temp files
                 export_clip_at_directory(directory, &output_path, &tmp_dir);
             }
 
@@ -352,6 +353,8 @@ fn quick_join_video_audio(path: &Path) -> io::Result<()> {
 }
 
 fn cleanup(tmp_dir: &TempDir) {
+    println!("Cleaning up our temporary directory...");
+
     fs::remove_file(tmp_dir.path().join("tmp_video.mp4"));
     fs::remove_file(tmp_dir.path().join("tmp_audio.mp4"));
 }
