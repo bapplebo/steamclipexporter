@@ -41,14 +41,11 @@ fn main() {
     // Take the top for now to test processing
     match get_subdirectories(directory_path) {
         Ok(subdirectories) => {
-            let first = subdirectories[0].clone(); // <- iterate through entire folder from here
+            println!("{:?}", subdirectories);
+            let first = subdirectories[6].clone(); // <- iterate through entire folder from here
             println!("Subdirectory: {}", first);
-            let video_clips_directory = validate_clip_directory(first.as_str())
-                .map(|res| res.unwrap_or_default())
-                .unwrap_or_default();
 
-            println!("Clips directory: {}", video_clips_directory);
-            let (steam_id, date, time) = parse_clip_string(video_clips_directory.as_str());
+            let (steam_id, date, time) = parse_clip_string(first.as_str());
 
             let game_name = match get_app_details(steam_id) {
                 Ok(app_details) => app_details
@@ -67,6 +64,11 @@ fn main() {
                 }
             };
 
+            let video_clips_directory = validate_clip_directory(first.as_str())
+                .map(|res| res.unwrap_or_default())
+                .unwrap_or_default();
+
+            println!("Clips directory: {}", video_clips_directory);
             let output_file_name = format!("{} {} {}", game_name, date, time);
             let _ = concat_m4s_files(Path::new(video_clips_directory.as_str()), output_file_name);
             //quick_join_video_audio(Path::new(video_clips_directory.as_str()));
@@ -330,7 +332,7 @@ fn sort_chunks(chunk_files: &mut Vec<PathBuf>) {
 fn parse_clip_string(clip_string: &str) -> (u64, u64, u64) {
     let path = Path::new(clip_string);
     let last_part = path.file_name().unwrap().to_str().unwrap();
-    let trimmed_part = last_part.trim_start_matches("bg_");
+    let trimmed_part = last_part.trim_start_matches("clip_");
     let parts: Vec<&str> = trimmed_part.split('_').collect();
     println!("parts: {:?}", parts);
     let clip_number = parts[0].parse().unwrap();
