@@ -2,7 +2,7 @@ use clap::Parser;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 #[derive(Parser, Debug)]
@@ -207,25 +207,32 @@ fn concat_audio_files(
 fn join_video_audio(tmp_dir: &TempDir) -> io::Result<()> {
     println!("Merging using ffmpeg...");
 
-    let output = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg")
         .arg("-i")
         .arg(tmp_dir.path().join("tmp_video.mp4"))
         .arg("-i")
         .arg(tmp_dir.path().join("tmp_audio.mp4"))
         .arg("-c:v")
         .arg("libx265")
+        .arg("-vtag")
+        .arg("hvc1")
         .arg("-c:a")
         .arg("copy")
         .arg("output.mp4")
-        .output()?;
+        .stdout(Stdio::piped())
+        .spawn()?;
 
-    if !output.status.success() {
+    let output = command.stdout.take().unwrap();
+
+    let mut buf_reader = io::BufReader::new(output);
+    io::copy(&mut buf_reader, &mut io::stdout())?;
+
+    let status = command.wait()?;
+
+    if !status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            format!(
-                "Failed to combine video and audio: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
+            format!("Failed to combine video and audio: {}", status),
         ));
     }
 
