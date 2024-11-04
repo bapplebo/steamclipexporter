@@ -2,12 +2,13 @@ use clap::Parser;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Error;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
+
+mod utils;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -45,7 +46,7 @@ fn main() {
             let first = subdirectories[6].clone(); // <- iterate through entire folder from here
             println!("Subdirectory: {}", first);
 
-            let (steam_id, date, time) = parse_clip_string(first.as_str());
+            let (steam_id, date, time) = utils::parse_clip_string(first.as_str());
 
             let game_name = match get_app_details(steam_id) {
                 Ok(app_details) => app_details
@@ -71,7 +72,6 @@ fn main() {
             println!("Clips directory: {}", video_clips_directory);
             let output_file_name = format!("{} {} {}", game_name, date, time);
             let _ = concat_m4s_files(Path::new(video_clips_directory.as_str()), output_file_name);
-            //quick_join_video_audio(Path::new(video_clips_directory.as_str()));
         }
         Err(error) => {
             println!(
@@ -131,10 +131,10 @@ fn concat_m4s_files(dir: &Path, output_file_name: String) -> io::Result<()> {
     if init_video_file_path.exists() && init_audio_file_path.exists() {
         let tmp_dir = tempfile::tempdir().expect("Failed to create temporary directory");
         println!("Creating temp directory in: {:?}", tmp_dir.path());
-        // Process video
-        concat_video_files(init_video_file_path, dir, &tmp_dir);
-        concat_audio_files(init_audio_file_path, dir, &tmp_dir);
-        join_video_audio(&tmp_dir, output_file_name);
+
+        concat_video_files(init_video_file_path, dir, &tmp_dir)?;
+        concat_audio_files(init_audio_file_path, dir, &tmp_dir)?;
+        join_video_audio(&tmp_dir, output_file_name)?;
 
         cleanup(&tmp_dir);
 
@@ -177,7 +177,7 @@ fn concat_video_files(
         })
         .collect();
 
-    sort_chunks(&mut chunk_files);
+    utils::sort_chunks(&mut chunk_files);
 
     // Append sorted chunk files
     for path in chunk_files {
@@ -220,7 +220,7 @@ fn concat_audio_files(
         })
         .collect();
 
-    sort_chunks(&mut chunk_files);
+    utils::sort_chunks(&mut chunk_files);
 
     // Append sorted chunk files
     for path in chunk_files {
@@ -307,39 +307,6 @@ fn quick_join_video_audio(path: &Path) -> io::Result<()> {
 fn cleanup(tmp_dir: &TempDir) {
     fs::remove_file(tmp_dir.path().join("tmp_video.mp4"));
     fs::remove_file(tmp_dir.path().join("tmp_audio.mp4"));
-}
-
-fn sort_chunks(chunk_files: &mut Vec<PathBuf>) {
-    chunk_files.sort_by(|a, b| {
-        // Extract the numeric part from the file names for comparison
-        let a_num = a
-            .file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.split('-').last())
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-        let b_num = b
-            .file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.split('-').last())
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-
-        a_num.cmp(&b_num)
-    });
-}
-
-fn parse_clip_string(clip_string: &str) -> (u64, u64, u64) {
-    let path = Path::new(clip_string);
-    let last_part = path.file_name().unwrap().to_str().unwrap();
-    let trimmed_part = last_part.trim_start_matches("clip_");
-    let parts: Vec<&str> = trimmed_part.split('_').collect();
-    println!("parts: {:?}", parts);
-    let clip_number = parts[0].parse().unwrap();
-    let date = parts[1].parse().unwrap();
-    let time = parts[2].parse().unwrap();
-
-    (clip_number, date, time)
 }
 
 fn get_app_details(steam_id: u64) -> Result<AppDetails, reqwest::Error> {
